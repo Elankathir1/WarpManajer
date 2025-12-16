@@ -22,18 +22,19 @@ jobs:
           node-version: 18
 
       - name: Install & Build
+        working-directory: manager
         run: |
           npm install
           npm run build
 
       - name: SPA fallback
         run: |
-          cp dist/index.html dist/404.html
+          cp manager/dist/index.html manager/dist/404.html
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: dist
+          path: manager/dist
 
       - name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v4
