@@ -1,4 +1,4 @@
-const CACHE_NAME = 'warp-manager-v22';
+const CACHE_NAME = 'warp-manager-v23';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',
