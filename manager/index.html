@@ -7,7 +7,8 @@
     <title>Powerloom Warp Manager</title>
     
     <!-- PWA Settings -->
-    <link rel="manifest" href="/manifest.json">
+    <!-- CHANGED: Removed leading slash to make path relative for GitHub Pages -->
+    <link rel="manifest" href="./manifest.json">
     <meta name="theme-color" content="#0f172a" />
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -36,7 +37,9 @@
     "html2canvas": "https://esm.sh/html2canvas@^1.4.1",
     "firebase/app": "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js",
     "firebase/database": "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js",
-    "firebase/": "https://esm.sh/firebase@^12.6.0/"
+    "firebase/": "https://esm.sh/firebase@^12.6.0/",
+    "vite": "https://esm.sh/vite@^7.3.0",
+    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2"
   }
 }
 </script>
@@ -57,8 +60,8 @@
             return;
           }
 
-          // CHANGED: Version 22 to force update on mobile
-          navigator.serviceWorker.register('./sw.js?v=22')
+          // CHANGED: Version 23 to force update on mobile
+          navigator.serviceWorker.register('./sw.js?v=23')
             .then(registration => {
               console.log('SW Registered:', registration);
               registration.update();
