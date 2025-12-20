@@ -1,99 +1,120 @@
+
 import React, { useRef } from 'react';
 import { storageService } from '../services/storageService';
-import { Download, Database, RefreshCcw, Cloud, Check } from 'lucide-react';
+import { Download, RefreshCcw, Trash2, ShieldAlert, UploadCloud, FileJson } from 'lucide-react';
 
-interface Props {
-  onUpdate: () => void;
-}
+export const DataManagement: React.FC<{ onUpdate: () => void }> = ({ onUpdate }) => {
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-export const DataManagement: React.FC<Props> = ({ onUpdate }) => {
-  
-  const handleDownloadBackup = () => {
-    const dataStr = storageService.exportData();
-    const blob = new Blob([dataStr], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `warp_manager_backup_${new Date().toISOString().split('T')[0]}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+  const handleImportClick = () => {
+    fileInputRef.current?.click();
   };
 
-  const handleClearCache = async () => {
-    if (confirm("⚠️ REFRESH APP\n\nThis will reload the latest version from the server. Use this if the app is stuck.\n\nYour data is safe in the Cloud.\n\nProceed?")) {
-      if ('serviceWorker' in navigator) {
-        const registrations = await navigator.serviceWorker.getRegistrations();
-        for (const registration of registrations) {
-          await registration.unregister();
-        }
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    // Fixed: Marked the onload callback as async to allow awaiting storageService.importData
+    reader.onload = async (event) => {
+      const content = event.target?.result as string;
+      // Fixed: Await the asynchronous importData method
+      const result = await storageService.importData(content);
+      if (result.success) {
+        alert("Success! Factory data has been restored.");
+        onUpdate();
+      } else {
+        alert("Error: " + result.message);
       }
-      window.location.reload();
-    }
-  }
+    };
+    reader.readAsText(file);
+    // Reset input
+    e.target.value = '';
+  };
 
   return (
-    <div className="space-y-6 animate-fade-in pb-12">
-      <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-        <div className="flex items-center gap-3 mb-6">
-          <Database className="w-6 h-6 text-indigo-600" />
-          <h2 className="text-xl font-bold text-slate-800">Data Management</h2>
-        </div>
+    <div className="space-y-6 animate-fade-in pb-20">
+      <div className="mb-6">
+        <h2 className="text-2xl font-bold text-slate-800">System Settings</h2>
+        <p className="text-slate-500">Manage data backups and factory configurations.</p>
+      </div>
 
-        {/* STATUS BANNER */}
-        <div className="mb-8 border rounded-xl p-5 bg-indigo-50 border-indigo-200">
-            <div className="flex items-center gap-2 mb-3">
-                <Cloud className="w-6 h-6 text-indigo-600" />
-                <h3 className="font-bold text-slate-800 text-lg">Cloud Database Connected</h3>
-                <span className="text-xs bg-indigo-200 text-indigo-800 px-2 py-1 rounded font-bold">LIVE</span>
-            </div>
-            
-            <p className="text-sm text-slate-600">
-                Your data is automatically saved to <strong>Firebase Firestore</strong>.
-                <br />
-                Everything you enter here will instantly appear on your mobile and laptop.
-            </p>
-        </div>
-
-        {/* BACKUP SECTION */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="border border-slate-200 rounded-lg p-5 bg-slate-50 hover:bg-slate-100 transition-colors">
-            <h3 className="font-bold text-slate-800 mb-2 flex items-center gap-2">
-              <Download className="w-5 h-5 text-indigo-600" />
-              Download Report
+      <div className="grid gap-6">
+        {/* Export Section */}
+        <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+              <Download className="w-5 h-5 text-indigo-600" /> Export & Backup
             </h3>
-            <p className="text-sm text-slate-500 mb-4">
-              Save a copy of your current data as a JSON file for your records.
-            </p>
-            <button
-              onClick={handleDownloadBackup}
-              className="w-full py-2 px-4 bg-white border border-slate-300 text-slate-700 font-semibold rounded-lg hover:bg-slate-50 hover:text-indigo-600 transition-all shadow-sm"
-            >
-              Download JSON
-            </button>
           </div>
-        </div>
+          <p className="text-sm text-slate-500 mb-6">Download a JSON file containing all transactions and loom states for external bookkeeping or safe storage.</p>
+          <button 
+            onClick={() => storageService.exportData()}
+            className="w-full sm:w-auto bg-indigo-600 text-white px-8 py-3 rounded-xl font-bold hover:bg-indigo-700 transition-all shadow-lg flex items-center justify-center gap-2"
+          >
+            <Download className="w-4 h-4" />
+            Download JSON Backup
+          </button>
+        </section>
 
-         {/* Cache Reset */}
-         <div className="mt-8 pt-6 border-t border-slate-200">
-           <h3 className="font-bold text-slate-800 mb-2 flex items-center gap-2">
-             <RefreshCcw className="w-4 h-4 text-slate-500" />
-             Troubleshooting
-           </h3>
-           <div className="flex items-center justify-between gap-4 bg-red-50 p-4 rounded-lg border border-red-100">
-             <div className="text-sm text-red-800">
-               If data isn't showing up, try refreshing the app.
-             </div>
-             <button 
-               onClick={handleClearCache}
-               className="whitespace-nowrap px-4 py-2 bg-white text-red-600 border border-red-200 rounded-lg text-sm font-bold hover:bg-red-50"
-             >
-               Refresh App
-             </button>
-           </div>
-         </div>
+        {/* Import Section */}
+        <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 border-l-4 border-l-emerald-500">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-bold text-slate-800 flex items-center gap-2">
+              <UploadCloud className="w-5 h-5 text-emerald-600" /> Import & Restore
+            </h3>
+          </div>
+          <p className="text-sm text-slate-500 mb-6">Restore your data from a previous backup file. <strong>Warning:</strong> This will overwrite all your current local data.</p>
+          
+          <input 
+            type="file" 
+            ref={fileInputRef} 
+            onChange={handleFileChange} 
+            accept=".json" 
+            className="hidden" 
+          />
+          
+          <button 
+            onClick={handleImportClick}
+            className="w-full sm:w-auto bg-emerald-50 text-emerald-700 border border-emerald-200 px-8 py-3 rounded-xl font-bold hover:bg-emerald-100 transition-all flex items-center justify-center gap-2"
+          >
+            <FileJson className="w-4 h-4" />
+            Choose Backup File
+          </button>
+        </section>
+
+        {/* Sync Section */}
+        <section className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+          <h3 className="text-lg font-bold text-slate-800 mb-4 flex items-center gap-2">
+            <RefreshCcw className="w-5 h-5 text-slate-400" /> Force UI Refresh
+          </h3>
+          <p className="text-sm text-slate-500 mb-4">Resynchronize the interface with the local database. Use this if the screen seems frozen or inconsistent.</p>
+          <button 
+            onClick={() => window.location.reload()}
+            className="w-full sm:w-auto bg-slate-900 text-white px-8 py-3 rounded-xl font-bold hover:bg-slate-800 transition-all"
+          >
+            Refresh Now
+          </button>
+        </section>
+
+        {/* Danger Zone */}
+        <section className="bg-red-50 p-6 rounded-2xl shadow-sm border border-red-100">
+          <h3 className="text-lg font-bold text-red-800 mb-4 flex items-center gap-2">
+            <ShieldAlert className="w-5 h-5" /> Danger Zone
+          </h3>
+          <p className="text-sm text-red-700 mb-6">Wipe all local data and reset factory defaults. This action cannot be undone and will delete your entire history.</p>
+          <button 
+            onClick={() => {
+              if (confirm('Are you absolutely sure? This will delete all history forever.')) {
+                storageService.resetAll();
+                onUpdate();
+              }
+            }}
+            className="w-full sm:w-auto bg-red-600 text-white px-8 py-3 rounded-xl font-bold hover:bg-red-700 transition-all shadow-lg shadow-red-200 flex items-center justify-center gap-2"
+          >
+            <Trash2 className="w-4 h-4" /> Reset Factory Data
+          </button>
+        </section>
       </div>
     </div>
   );

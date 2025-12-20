@@ -1,11 +1,15 @@
+
 import React, { useState, useEffect } from 'react';
 import { HashRouter, Routes, Route, NavLink, Navigate } from 'react-router-dom';
 import { LoomDashboard } from './components/LoomDashboard';
 import { TransactionForm } from './components/TransactionForm';
 import { DataManagement } from './components/DataManagement';
+import { FactoryOverview } from './components/FactoryOverview';
+import { Help } from './components/Help';
+import Logo from './components/Logo';
 import { storageService } from './services/storageService';
 import { LoomID, LoomConfig, Transaction } from './types';
-import { LayoutDashboard, Factory, PlusSquare, Menu, X, DownloadCloud, Settings, CloudLightning, Loader2 } from 'lucide-react';
+import { LayoutDashboard, Factory, PlusSquare, Menu, X, DownloadCloud, Settings, CloudLightning, Loader2, CircleHelp, BarChart3, Database, Wifi, WifiOff } from 'lucide-react';
 import clsx from 'clsx';
 
 function App() {
@@ -14,18 +18,12 @@ function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isConnected, setIsConnected] = useState(false);
 
-  // Load data on mount and listen for install prompt
   useEffect(() => {
-    // 1. Initialize Cloud Connection IMMEDIATELY
     storageService.initializeCloud();
-
-    // 2. Initial Data Load check
-    refreshData();
-
-    // 3. Subscribe to changes (Real-time updates)
     const unsubscribe = storageService.subscribe(() => {
-        refreshData();
+      refreshData();
     });
 
     const handleBeforeInstallPrompt = (e: any) => {
@@ -34,6 +32,9 @@ function App() {
     };
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    
+    // Initial refresh
+    refreshData();
 
     return () => {
       unsubscribe();
@@ -44,8 +45,8 @@ function App() {
   const refreshData = () => {
     setTransactions(storageService.getTransactions());
     setLoomConfigs(storageService.getLoomConfigs());
-    // Only stop loading if the service says data is ready
     setIsLoading(storageService.getLoadingStatus());
+    setIsConnected(storageService.getConnectionStatus());
   };
 
   const handleInstallClick = async () => {
@@ -73,22 +74,21 @@ function App() {
     </NavLink>
   );
 
-  // --- LOADING SCREEN ---
   if (isLoading) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-4">
+        <Logo size="lg" className="mb-8 animate-pulse" />
         <Loader2 className="w-12 h-12 text-indigo-600 animate-spin mb-4" />
-        <h2 className="text-xl font-bold text-slate-800">Syncing Data...</h2>
-        <p className="text-slate-500 text-sm mt-2">Connecting to Cloud Database</p>
+        <h2 className="text-xl font-bold text-slate-800 text-center uppercase tracking-tight">Syncing with Warp Cloud...</h2>
+        <p className="text-slate-500 text-sm mt-2 text-center max-w-xs">Establishing secure connection to Firebase Realtime Database</p>
       </div>
     );
   }
 
   return (
     <HashRouter>
-      <div className="min-h-screen flex bg-slate-100">
+      <div className="min-h-screen flex bg-slate-50">
         
-        {/* Mobile Sidebar Overlay */}
         {isMobileMenuOpen && (
           <div 
             className="fixed inset-0 bg-black/50 z-20 lg:hidden"
@@ -98,83 +98,106 @@ function App() {
 
         {/* Sidebar */}
         <aside className={clsx(
-          "fixed lg:static inset-y-0 left-0 z-30 w-64 bg-slate-900 text-slate-200 p-4 transform transition-transform duration-200 lg:translate-x-0 flex flex-col",
+          "fixed lg:static inset-y-0 left-0 z-30 w-64 bg-slate-900 text-slate-200 p-4 transform transition-transform duration-200 lg:translate-x-0 flex flex-col shadow-2xl lg:shadow-none",
           isMobileMenuOpen ? "translate-x-0" : "-translate-x-full"
         )}>
-          <div className="flex items-center justify-between mb-8 px-2">
-            <h1 className="text-xl font-bold text-white flex items-center gap-2">
-              <Factory className="text-indigo-500" />
-              WarpManager
-            </h1>
-            <button onClick={() => setIsMobileMenuOpen(false)} className="lg:hidden">
+          <div className="flex items-center justify-between mb-8 px-2 mt-4">
+            <div className="flex flex-col">
+              <Logo size="sm" />
+              <h1 className="text-xl font-black text-white mt-1 tracking-tighter">
+                WarpManager
+              </h1>
+            </div>
+            <button onClick={() => setIsMobileMenuOpen(false)} className="lg:hidden text-slate-400 hover:text-white">
               <X className="w-6 h-6" />
             </button>
           </div>
 
-          <div className="space-y-2 flex-1">
+          <div className="space-y-2 flex-1 overflow-y-auto sidebar-scroll pr-2">
             <SidebarLink to="/entry" icon={PlusSquare} label="Data Entry" />
             
-            <div className="pt-4 pb-2 px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">
-              Dashboards
+            <div className="pt-4 pb-2 px-4 text-[11px] font-bold text-slate-500 uppercase tracking-widest">
+              Loom Dashboards
             </div>
-            <SidebarLink to="/loom/1" icon={LayoutDashboard} label="Loom 1" />
-            <SidebarLink to="/loom/2" icon={LayoutDashboard} label="Loom 2" />
-            <SidebarLink to="/loom/3" icon={LayoutDashboard} label="Loom 3" />
-            <SidebarLink to="/loom/4" icon={LayoutDashboard} label="Loom 4" />
+            {(['1', '2', '3', '4'] as LoomID[]).map(id => (
+              <SidebarLink key={id} to={`/loom/${id}`} icon={LayoutDashboard} label={`Loom ${id}`} />
+            ))}
+            
+            <div className="mt-2 pt-2 border-t border-slate-800">
+               <SidebarLink to="/overview" icon={BarChart3} label="Dashboard Overview" />
+            </div>
 
-            <div className="pt-4 pb-2 px-4 text-xs font-semibold text-slate-500 uppercase tracking-wider">
-              System
+            <div className="pt-6 pb-2 px-4 text-[11px] font-bold text-slate-500 uppercase tracking-widest">
+              Resources
             </div>
             <SidebarLink to="/settings" icon={Settings} label="Settings" />
+            <SidebarLink to="/help" icon={CircleHelp} label="User Guide" />
           </div>
 
-          {/* Sync Status */}
-          <div className="mb-4 px-4 py-2 bg-indigo-900/50 rounded border border-indigo-700 flex items-center gap-2 text-xs text-indigo-300">
-              <CloudLightning className="w-4 h-4 text-green-400 animate-pulse" />
-              <span>Sync Active</span>
-          </div>
+          <div className="mt-auto pt-6 border-t border-slate-800">
+            <div className={clsx(
+                "mb-2 px-4 py-2 rounded border flex items-center gap-2 text-[10px] transition-colors",
+                isConnected 
+                  ? "bg-emerald-900/40 border-emerald-700/50 text-emerald-300" 
+                  : "bg-rose-900/40 border-rose-700/50 text-rose-300"
+            )}>
+                {isConnected ? <Wifi className="w-3 h-3 text-emerald-400" /> : <WifiOff className="w-3 h-3 text-rose-400 animate-pulse" />}
+                <span>{isConnected ? 'Firebase Real-time Active' : 'Offline / Reconnecting'}</span>
+            </div>
+            
+            <div className="mb-4 px-4 py-2 bg-indigo-900/40 rounded border border-indigo-700/50 flex items-center gap-2 text-[11px] text-indigo-300">
+                <CloudLightning className="w-3 h-3 text-indigo-400 animate-pulse" />
+                <span>Encrypted Sync Shield</span>
+            </div>
 
-          {/* Install Button (Only shows if installable) */}
-          {deferredPrompt && (
-            <div className="mb-4">
+            {deferredPrompt && (
               <button 
                 onClick={handleInstallClick}
-                className="w-full flex items-center justify-center gap-2 bg-indigo-500 hover:bg-indigo-600 text-white py-2 rounded-lg text-sm font-semibold transition-colors"
+                className="w-full mb-4 flex items-center justify-center gap-2 bg-indigo-500 hover:bg-indigo-600 text-white py-2.5 rounded-xl text-sm font-bold transition-all shadow-lg active:scale-95"
               >
                 <DownloadCloud className="w-4 h-4" />
-                Install App
+                Install PWA
               </button>
-            </div>
-          )}
-          
-          <div className="text-center mt-auto">
-            <div className="text-xs text-slate-600 mb-1">v1.5.0 (Cloud)</div>
-            <div className="text-[10px] text-slate-500 font-medium opacity-70">
-              Project: <span className="text-indigo-400">{storageService.getProjectId()}</span>
+            )}
+            
+            <div className="text-center px-4">
+              <div className="text-[11px] text-slate-600 mb-1 font-mono">CLOUD BUILD v2.0</div>
+              <div className="text-[11px] text-slate-500 font-medium opacity-50">
+                ID: <span className="text-indigo-400">{storageService.getProjectId()}</span>
+              </div>
             </div>
           </div>
         </aside>
 
         {/* Main Content */}
         <div className="flex-1 flex flex-col min-h-screen min-w-0 overflow-hidden">
-          {/* Header */}
-          <header className="bg-white border-b border-slate-200 p-4 flex items-center gap-4 lg:hidden">
-            <button onClick={() => setIsMobileMenuOpen(true)}>
+          <header className="bg-white border-b border-slate-200 p-4 flex items-center gap-4 lg:hidden sticky top-0 z-10 shadow-sm">
+            <button 
+              onClick={() => setIsMobileMenuOpen(true)}
+              className="p-2 hover:bg-slate-100 rounded-lg transition-colors"
+            >
               <Menu className="w-6 h-6 text-slate-600" />
             </button>
-            <span className="font-bold text-slate-800">Powerloom Dashboard</span>
+            <div className="flex items-center gap-2">
+              <Logo size="sm" />
+              <span className="font-black text-slate-900 tracking-tighter text-sm">WarpManager</span>
+            </div>
           </header>
 
-          <main className="flex-1 overflow-auto p-4 md:p-8">
-            <div className="max-w-5xl mx-auto">
+          <main className="flex-1 overflow-auto p-4 md:p-8 lg:p-10">
+            <div className="max-w-6xl mx-auto">
               <Routes>
                 <Route path="/" element={<Navigate to="/entry" replace />} />
                 
+                <Route path="/overview" element={
+                  <FactoryOverview loomConfigs={loomConfigs} transactions={transactions} />
+                } />
+
                 <Route path="/entry" element={
                   <div className="space-y-6">
-                    <div className="mb-6">
-                      <h2 className="text-2xl font-bold text-slate-800">Daily Data Entry</h2>
-                      <p className="text-slate-500">Log material receipts and production counts here.</p>
+                    <div>
+                      <h2 className="text-2xl font-bold text-slate-800">Daily Operations</h2>
+                      <p className="text-slate-500">Log production sarees and inventory receipts.</p>
                     </div>
                     <TransactionForm onSuccess={refreshData} />
                   </div>
@@ -184,7 +207,10 @@ function App() {
                   <DataManagement onUpdate={refreshData} />
                 } />
 
-                {/* Dynamic Route for Looms */}
+                <Route path="/help" element={
+                  <Help />
+                } />
+
                 {['1', '2', '3', '4'].map((id) => (
                   <Route 
                     key={id}

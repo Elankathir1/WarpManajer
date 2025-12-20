@@ -1,5 +1,5 @@
 {
-  "name": "Copy of Powerloom Warp Manager",
-  "description": "A comprehensive batch management system for textile powerlooms tracking material usage, production, and batch archiving.",
+  "name": "WarpManager - Industrial Loom Management",
+  "description": "A comprehensive PWA for managing powerloom production, tracking material stock (Cone/Jarigai), and monitoring batch progress with automated inventory calculations and cloud synchronization.",
   "requestFramePermissions": []
 }

@@ -1,46 +1,109 @@
+
+/**
+ * Represents valid Loom IDs in the system
+ */
 export type LoomID = '1' | '2' | '3' | '4';
 
-export type TransactionType = 'MATERIAL_IN' | 'SAREE_OUT';
+/**
+ * Types of transactions supported by the inventory system
+ */
+export type TransactionType = 
+  | 'PRODUCTION' 
+  | 'CONE_RECEIPT' 
+  | 'JARIGAI_RECEIPT' 
+  | 'CONE_RETURN' 
+  | 'JARIGAI_RETURN'
+  | 'CONE_OPENING'
+  | 'JARIGAI_OPENING';
 
-export type ItemType = 'CONE' | 'JARIGAI' | 'SAREE';
-
+/**
+ * A single entry in the loom history
+ */
 export interface Transaction {
   id: string;
-  date: string; // ISO Date String
-  billNo: string;
   loomId: LoomID;
+  batchNumber: number; // Linked to a specific batch
   type: TransactionType;
-  item: ItemType;
-  quantity: number;
-  notes?: string;
+  value: number;
+  note?: string;
   timestamp: number;
-  batchId?: string; // New: Links transaction to a specific batch cycle
-  isArchived?: boolean; // Deprecated but kept for backward compatibility if needed
 }
 
+/**
+ * Represents a manufacturing batch with full material audit
+ */
+export interface Batch {
+  id: string;
+  loomId: LoomID;
+  batchNumber: number;
+  target: number;
+  produced: number;
+  remaining: number;
+  status: 'current' | 'completed';
+  color?: string;
+  startTime: number;
+  endTime?: number;
+  
+  // Material Audit
+  openingCone: number;
+  openingJarigai: number;
+  receivedCone: number;
+  receivedJarigai: number;
+  returnedCone: number;
+  returnedJarigai: number;
+  consumedCone: number;
+  consumedJarigai: number;
+  closingCone: number;
+  closingJarigai: number;
+}
+
+/**
+ * Structured response for batch queries
+ */
+export interface BatchResponse {
+  current_batch: Batch | null;
+  last_three_completed: Batch[];
+}
+
+/**
+ * Configuration and state for a specific loom
+ */
 export interface LoomConfig {
   id: LoomID;
-  startDate: string; 
-  targetQty: number;
-  coneFactor: number;
-  jarigaiFactor: number;
-  currentBatchId?: string; // The active batch ID for this loom
-  batchNumber?: number; // Sequential batch number (e.g., 1, 2, 3)
+  target: number;
+  current: number;
+  batchNumber: number; // Current active batch number
+  coneStock: number;
+  jarigaiStock: number;
+  coneUsageFactor: number;
+  jarigaiUsageFactor: number;
 }
 
-export interface CloudConfig {
-  apiKey: string;
-  authDomain: string;
-  databaseURL: string;
-  projectId: string;
-  storageBucket: string;
-  messagingSenderId: string;
-  appId: string;
+/**
+ * Root data structure for local storage
+ */
+export interface AppData {
+  schemaVersion: number; // To prevent data loss on updates
+  transactions: Transaction[];
+  loomConfigs: Record<LoomID, LoomConfig>;
 }
 
-export const DEFAULT_LOOM_CONFIGS: Record<LoomID, LoomConfig> = {
-  '1': { id: '1', startDate: new Date().toISOString().split('T')[0], targetQty: 80, coneFactor: 0.450, jarigaiFactor: 0.1, currentBatchId: 'batch_legacy_1', batchNumber: 1 },
-  '2': { id: '2', startDate: new Date().toISOString().split('T')[0], targetQty: 80, coneFactor: 0.450, jarigaiFactor: 0.1, currentBatchId: 'batch_legacy_2', batchNumber: 1 },
-  '3': { id: '3', startDate: new Date().toISOString().split('T')[0], targetQty: 80, coneFactor: 0.450, jarigaiFactor: 0.1, currentBatchId: 'batch_legacy_3', batchNumber: 1 },
-  '4': { id: '4', startDate: new Date().toISOString().split('T')[0], targetQty: 80, coneFactor: 0.450, jarigaiFactor: 0.1, currentBatchId: 'batch_legacy_4', batchNumber: 1 },
-};
+/**
+ * Represents a code file in the system
+ */
+export interface CodeFile {
+  name: string;
+  content: string;
+}
+
+/**
+ * Response structure for AI-driven code updates
+ */
+export interface UpdateResponse {
+  updatedFiles: {
+    filename: string;
+    content: string;
+    explanation: string;
+  }[];
+  summary: string;
+}

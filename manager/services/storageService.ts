@@ -1,309 +1,226 @@
-import { LoomConfig, Transaction, DEFAULT_LOOM_CONFIGS, LoomID } from '../types';
-import { initializeApp } from 'firebase/app';
-import { 
-  getDatabase, 
-  ref, 
-  set, 
-  onValue, 
-  update, 
-  remove 
-} from 'firebase/database';
 
-// --- FIREBASE CONFIGURATION ---
-const firebaseConfig = {
-  apiKey: "AIzaSyAePkyOHqAUWpe42XxCdMIGq1uoqn27rOg",
-  authDomain: "warpmanager-80839.firebaseapp.com",
-  projectId: "warpmanager-80839",
-  storageBucket: "warpmanager-80839.firebasestorage.app",
-  messagingSenderId: "305574303128",
-  appId: "1:305574303128:web:2bac4e26a7b548609707ed",
-  measurementId: "G-2DWHZH9KV5",
-  databaseURL: "https://warpmanager-80839-default-rtdb.asia-southeast1.firebasedatabase.app"
+import { AppData, LoomConfig, LoomID, Transaction } from '../types';
+import { initializeApp } from 'firebase/app';
+import { getDatabase, ref, set, onValue, update, remove } from 'firebase/database';
+
+const DATABASE_URL = 'https://warpmanager-80839-default-rtdb.asia-southeast1.firebasedatabase.app';
+const CURRENT_SCHEMA_VERSION = 3;
+
+const DEFAULT_CONFIGS: Record<LoomID, LoomConfig> = {
+  '1': { id: '1', target: 80, current: 0, batchNumber: 1, coneStock: 10, jarigaiStock: 5, coneUsageFactor: 0.12, jarigaiUsageFactor: 0.05 },
+  '2': { id: '2', target: 80, current: 0, batchNumber: 1, coneStock: 10, jarigaiStock: 5, coneUsageFactor: 0.12, jarigaiUsageFactor: 0.05 },
+  '3': { id: '3', target: 80, current: 0, batchNumber: 1, coneStock: 10, jarigaiStock: 5, coneUsageFactor: 0.12, jarigaiUsageFactor: 0.05 },
+  '4': { id: '4', target: 80, current: 0, batchNumber: 1, coneStock: 10, jarigaiStock: 5, coneUsageFactor: 0.12, jarigaiUsageFactor: 0.05 },
 };
 
-// Initialize Firebase (RTDB)
-const app = initializeApp(firebaseConfig);
-const db = getDatabase(app);
+const ZERO_CONFIGS: Record<LoomID, LoomConfig> = {
+  '1': { id: '1', target: 80, current: 0, batchNumber: 0, coneStock: 0, jarigaiStock: 0, coneUsageFactor: 0.12, jarigaiUsageFactor: 0.05 },
+  '2': { id: '2', target: 80, current: 0, batchNumber: 0, coneStock: 0, jarigaiStock: 0, coneUsageFactor: 0.12, jarigaiUsageFactor: 0.05 },
+  '3': { id: '3', target: 80, current: 0, batchNumber: 0, coneStock: 0, jarigaiStock: 0, coneUsageFactor: 0.12, jarigaiUsageFactor: 0.05 },
+  '4': { id: '4', target: 80, current: 0, batchNumber: 0, coneStock: 0, jarigaiStock: 0, coneUsageFactor: 0.12, jarigaiUsageFactor: 0.05 },
+};
 
-console.log(`[Firebase RTDB] Connected to: ${firebaseConfig.databaseURL}`);
+class StorageService {
+  private db: any;
+  private listeners: (() => void)[] = [];
+  private cache: AppData = {
+    schemaVersion: CURRENT_SCHEMA_VERSION,
+    transactions: [],
+    loomConfigs: DEFAULT_CONFIGS
+  };
+  private loading = true;
+  private isConnected = false;
 
-// Local Memory Cache
-let localTransactions: Transaction[] = [];
-// Start with defaults in memory (Read-Only until Cloud Loads)
-let localConfigs: Record<LoomID, LoomConfig> = JSON.parse(JSON.stringify(DEFAULT_LOOM_CONFIGS));
+  constructor() {
+    const firebaseConfig = { databaseURL: DATABASE_URL };
+    const app = initializeApp(firebaseConfig);
+    this.db = getDatabase(app);
+    this.initRealtimeSync();
+  }
 
-// Loading States
-let isTxLoaded = false;
-let isConfigLoaded = false;
-let isInitialized = false;
-
-// Event Listeners
-type ChangeListener = () => void;
-const listeners: ChangeListener[] = [];
-
-// Helper to round numbers
-const cleanNum = (num: number) => Math.round((num + Number.EPSILON) * 1000) / 1000;
-
-export const storageService = {
-  
-  // Expose Project ID for UI verification
-  getProjectId: () => "RTDB: " + firebaseConfig.projectId,
-
-  // --- INITIALIZATION ---
-  initializeCloud: () => {
-    if (isInitialized) return;
-    isInitialized = true;
-    console.log("[RTDB] Connecting...");
-
-    // 1. Listen to Transactions (/transactions)
-    const txRef = ref(db, 'transactions');
-    onValue(txRef, (snapshot) => {
+  private initRealtimeSync() {
+    const dataRef = ref(this.db, 'warp_manager_data');
+    onValue(dataRef, (snapshot) => {
       const data = snapshot.val();
-      if (data) {
-        // Convert Object of Objects -> Array
-        localTransactions = Object.values(data);
-        console.log(`[RTDB] Loaded ${localTransactions.length} transactions.`);
+      if (!data) {
+        this.resetAll(false);
       } else {
-        localTransactions = [];
-        console.log("[RTDB] No transactions found (Empty DB).");
-      }
-      isTxLoaded = true;
-      storageService.notifyListeners();
-    }, (error) => {
-      console.error("[RTDB] Tx Error:", error);
-      isTxLoaded = true; // Unblock UI on error
-      storageService.notifyListeners();
-    });
-
-    // 2. Listen to Configs (/loom_configs)
-    const configRef = ref(db, 'loom_configs');
-    onValue(configRef, (snapshot) => {
-      const data = snapshot.val();
-      if (data) {
-        // Merge cloud data with defaults to ensure all fields exist
-        const newConfigs = { ...DEFAULT_LOOM_CONFIGS };
-        Object.keys(data).forEach((key) => {
-            if (newConfigs[key as LoomID]) {
-                newConfigs[key as LoomID] = data[key];
-            }
-        });
-        localConfigs = newConfigs;
-        console.log("[RTDB] Configurations loaded.");
-      } else {
-        console.log("[RTDB] No configs found. Using Defaults (Read-Only).");
-        // We do NOT write to DB here. We just use defaults in memory.
-        localConfigs = JSON.parse(JSON.stringify(DEFAULT_LOOM_CONFIGS));
-      }
-      isConfigLoaded = true;
-      storageService.notifyListeners();
-    }, (error) => {
-      console.error("[RTDB] Config Error:", error);
-      isConfigLoaded = true;
-      storageService.notifyListeners();
-    });
-  },
-
-  // --- READ ---
-  getTransactions: () => localTransactions,
-  getLoomConfigs: () => localConfigs,
-  
-  // Loading Guard
-  getLoadingStatus: () => {
-    return !isTxLoaded || !isConfigLoaded;
-  },
-
-  // --- WRITE ---
-  addTransaction: async (tx: Transaction) => {
-    // Optimistic Update (Prevent Duplicate Push)
-    if (!localTransactions.find(t => t.id === tx.id)) {
-        localTransactions.push(tx);
-        storageService.notifyListeners();
-    }
-    try { 
-        await set(ref(db, `transactions/${tx.id}`), tx); 
-    } catch (e) { console.error(e); }
-  },
-
-  deleteTransaction: async (id: string) => {
-    localTransactions = localTransactions.filter(t => t.id !== id);
-    storageService.notifyListeners();
-    try { 
-        await remove(ref(db, `transactions/${id}`)); 
-    } catch (e) { console.error(e); }
-  },
-
-  updateLoomConfig: async (id: LoomID, updates: Partial<LoomConfig>) => {
-    const current = localConfigs[id];
-    const updated = { ...current, ...updates };
-    localConfigs[id] = updated;
-    storageService.notifyListeners();
-    // This writes the SPECIFIC Loom ID node
-    try { 
-        await update(ref(db, `loom_configs/${id}`), updated); 
-    } catch (e) { console.error(e); }
-  },
-
-  // --- BATCH HELPERS ---
-  addTransactionsBatch: async (transactions: Transaction[]) => {
-    if (transactions.length === 0) return;
-    
-    // Optimistic Update with Deduplication
-    transactions.forEach(tx => {
-        if (!localTransactions.find(t => t.id === tx.id)) {
-            localTransactions.push(tx);
+        this.cache = {
+          ...data,
+          transactions: data.transactions ? Object.values(data.transactions) : []
+        };
+        if (this.cache.schemaVersion < CURRENT_SCHEMA_VERSION) {
+          this.migrate(this.cache);
         }
+        this.isConnected = true;
+        this.loading = false;
+        this.notify();
+      }
     });
-    storageService.notifyListeners();
+  }
 
-    try {
-        // Atomic Multi-Path Update
-        const updates: Record<string, any> = {};
-        transactions.forEach(tx => {
-            updates[`transactions/${tx.id}`] = tx;
-        });
-        await update(ref(db), updates);
-    } catch (e) { console.error(e); }
-  },
+  private async migrate(data: AppData) {
+    data.schemaVersion = CURRENT_SCHEMA_VERSION;
+    await set(ref(this.db, 'warp_manager_data/schemaVersion'), CURRENT_SCHEMA_VERSION);
+  }
 
-  // --- ATOMIC BATCH SPLIT ---
-  performBatchSplit: async (
-    loomId: LoomID, 
-    fillers: Transaction[], 
-    excessItems: Transaction[]
-  ) => {
-    console.log("Starting Atomic Batch Split (RTDB)...");
-    
-    const config = localConfigs[loomId];
-    if (!config) throw new Error("Config not found for Loom " + loomId);
-    
-    const oldBatchId = config.currentBatchId;
-    
-    // 1. Calculate Balances from OLD Batch Data
-    const existingBatchTxs = localTransactions.filter(t => {
-        if (String(t.loomId) !== String(loomId)) return false;
-        if (t.isArchived) return false;
-        if (oldBatchId && oldBatchId.includes('legacy') && !t.batchId) return true;
-        if (t.batchId === oldBatchId) return true;
-        return false;
-    });
+  initializeCloud() {}
 
-    const finalBatchTxs = [...existingBatchTxs, ...fillers];
+  subscribe(listener: () => void) {
+    this.listeners.push(listener);
+    return () => { this.listeners = this.listeners.filter(l => l !== listener); };
+  }
 
-    const totalProduction = cleanNum(finalBatchTxs.filter(t => t.item === 'SAREE').reduce((sum, t) => sum + t.quantity, 0));
-    
-    const coneTotalIn = finalBatchTxs.filter(t => t.item === 'CONE' && t.type === 'MATERIAL_IN').reduce((sum, t) => sum + t.quantity, 0);
-    const coneUsed = cleanNum(totalProduction * config.coneFactor);
-    const finalConeBal = cleanNum(coneTotalIn - coneUsed);
+  private notify() { this.listeners.forEach(l => l()); }
 
-    const jarigaiTotalIn = finalBatchTxs.filter(t => t.item === 'JARIGAI' && t.type === 'MATERIAL_IN').reduce((sum, t) => sum + t.quantity, 0);
-    const jarigaiUsed = cleanNum(totalProduction * config.jarigaiFactor);
-    const finalJarigaiBal = cleanNum(jarigaiTotalIn - jarigaiUsed);
+  getTransactions(): Transaction[] {
+    return [...this.cache.transactions].sort((a, b) => b.timestamp - a.timestamp);
+  }
 
-    // 2. Prepare NEW Batch Config
-    const nextBatchNum = (config.batchNumber || 1) + 1;
-    const newBatchId = `batch_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-    const newConfigData = {
-        ...config,
-        startDate: new Date().toISOString().split('T')[0],
-        currentBatchId: newBatchId,
-        batchNumber: nextBatchNum
+  getLoomConfigs(): Record<LoomID, LoomConfig> {
+    return this.cache.loomConfigs || DEFAULT_CONFIGS;
+  }
+
+  getLoadingStatus(): boolean { return this.loading; }
+  getConnectionStatus(): boolean { return this.isConnected; }
+  getProjectId(): string { return "PRJ-WARP-CLOUD-80839"; }
+
+  private async addOpeningBalanceEntries(config: LoomConfig, timestamp: number, updates: any) {
+    const coneId = `opening-cone-${config.id}-${config.batchNumber}-${timestamp}`;
+    const jarigaiId = `opening-jarigai-${config.id}-${config.batchNumber}-${timestamp + 1}`;
+
+    updates[`transactions/${coneId}`] = {
+      id: coneId, loomId: config.id, batchNumber: config.batchNumber, type: 'CONE_OPENING',
+      value: config.coneStock, timestamp, note: `Opening Balance (Batch #${config.batchNumber})`
     };
 
-    // 3. Prepare NEW Batch Transactions
-    const newTransactions: Transaction[] = [];
-    const dateStr = new Date().toISOString().split('T')[0];
+    updates[`transactions/${jarigaiId}`] = {
+      id: jarigaiId, loomId: config.id, batchNumber: config.batchNumber, type: 'JARIGAI_OPENING',
+      value: config.jarigaiStock, timestamp: timestamp + 1, note: `Opening Balance (Batch #${config.batchNumber})`
+    };
+  }
+
+  /**
+   * Atomic batch update for multiple transactions to prevent race conditions.
+   */
+  async addBatchTransactions(loomId: LoomID, txs: Omit<Transaction, 'id' | 'timestamp' | 'batchNumber' | 'loomId'>[]) {
+    const config = { ...this.cache.loomConfigs[loomId] };
     const timestamp = Date.now();
+    const updates: any = {};
 
-    // Create Opening Balances (Single Entry Check)
-    // Note: We create distinct IDs here. 
-    if (Math.abs(finalConeBal) > 0.001) {
-        newTransactions.push({
-            id: crypto.randomUUID(), date: dateStr, billNo: 'OPENING BAL', loomId,
-            type: 'MATERIAL_IN', item: 'CONE', quantity: finalConeBal,
-            timestamp: timestamp + 5, batchId: newBatchId
-        });
-    }
-
-    if (Math.abs(finalJarigaiBal) > 0.001) {
-        newTransactions.push({
-            id: crypto.randomUUID(), date: dateStr, billNo: 'OPENING BAL', loomId,
-            type: 'MATERIAL_IN', item: 'JARIGAI', quantity: finalJarigaiBal,
-            timestamp: timestamp + 6, batchId: newBatchId
-        });
-    }
-
-    // Add Excess Items (Single Entry)
-    excessItems.forEach((tx, idx) => {
-        newTransactions.push({
-            ...tx,
-            batchId: newBatchId,
-            timestamp: timestamp + 10 + idx
-        });
-    });
-
-    try {
-        // --- RTDB ATOMIC MULTI-PATH UPDATE ---
-        const updates: Record<string, any> = {};
-
-        // A. Add Fillers to Old Batch
-        fillers.forEach(tx => {
-            updates[`transactions/${tx.id}`] = tx;
-        });
-
-        // B. Archive Old Transactions
-        existingBatchTxs.forEach(tx => {
-            updates[`transactions/${tx.id}/isArchived`] = true;
-        });
-
-        // C. Update Config to New Batch
-        updates[`loom_configs/${loomId}`] = newConfigData;
-
-        // D. Add New Batch Transactions
-        newTransactions.forEach(tx => {
-            updates[`transactions/${tx.id}`] = tx;
-        });
-        
-        // Execute Atomic Write
-        await update(ref(db), updates);
-
-        // --- OPTIMISTIC UI UPDATE (With Deduplication) ---
-        // 1. Update Config
-        localConfigs[loomId] = newConfigData;
-        
-        // 2. Add Fillers locally (if not exists)
-        fillers.forEach(tx => {
-            if (!localTransactions.find(t => t.id === tx.id)) localTransactions.push(tx);
-        });
-
-        // 3. Archive existing locally
-        localTransactions.forEach(tx => {
-            if (finalBatchTxs.find(ft => ft.id === tx.id)) {
-                tx.isArchived = true;
+    for (const tx of txs) {
+      if (tx.type === 'PRODUCTION') {
+        let remainingValue = tx.value;
+        while (remainingValue > 0) {
+          const spaceInBatch = Math.max(0, config.target - config.current);
+          if (remainingValue > spaceInBatch && spaceInBatch > 0) {
+            const fillValue = spaceInBatch;
+            const id = Math.random().toString(36).substr(2, 9);
+            updates[`transactions/${id}`] = {
+              ...tx, loomId, value: fillValue, batchNumber: config.batchNumber, id, timestamp,
+              note: `${tx.note || ''} (Batch #${config.batchNumber} Part)`.trim()
+            };
+            config.coneStock -= fillValue * config.coneUsageFactor;
+            config.jarigaiStock -= fillValue * config.jarigaiUsageFactor;
+            config.current = 0;
+            config.batchNumber += 1;
+            remainingValue -= fillValue;
+            this.addOpeningBalanceEntries(config, timestamp + 10, updates);
+          } else {
+            const id = Math.random().toString(36).substr(2, 9);
+            updates[`transactions/${id}`] = {
+              ...tx, loomId, value: remainingValue, batchNumber: config.batchNumber, id, timestamp: timestamp + 20,
+              note: remainingValue !== tx.value ? `${tx.note || ''} (Batch #${config.batchNumber} Overflow)`.trim() : tx.note
+            };
+            config.current += remainingValue;
+            config.coneStock -= remainingValue * config.coneUsageFactor;
+            config.jarigaiStock -= remainingValue * config.jarigaiUsageFactor;
+            if (config.current >= config.target) {
+              config.current = 0;
+              config.batchNumber += 1;
+              this.addOpeningBalanceEntries(config, timestamp + 30, updates);
             }
-        });
-
-        // 4. Add New Transactions locally (if not exists)
-        newTransactions.forEach(tx => {
-            if (!localTransactions.find(t => t.id === tx.id)) localTransactions.push(tx);
-        });
-
-        storageService.notifyListeners();
-        return newBatchId;
-
-    } catch (e) {
-        console.error("Critical Error in Batch Split (RTDB):", e);
-        throw e;
+            remainingValue = 0;
+          }
+        }
+      } else {
+        const id = Math.random().toString(36).substr(2, 9);
+        updates[`transactions/${id}`] = { ...tx, loomId, batchNumber: config.batchNumber, id, timestamp };
+        if (tx.type === 'CONE_RECEIPT') config.coneStock += tx.value;
+        else if (tx.type === 'JARIGAI_RECEIPT') config.jarigaiStock += tx.value;
+        else if (tx.type === 'CONE_RETURN') config.coneStock -= tx.value;
+        else if (tx.type === 'JARIGAI_RETURN') config.jarigaiStock -= tx.value;
+      }
     }
-  },
 
-  // --- REACT SYNC ---
-  subscribe: (listener: ChangeListener) => {
-    listeners.push(listener);
-    return () => { const i = listeners.indexOf(listener); if(i > -1) listeners.splice(i, 1); };
-  },
-  notifyListeners: () => listeners.forEach(l => l()),
-  exportData: () => JSON.stringify({ transactions: localTransactions, configs: localConfigs }, null, 2),
-  getCloudConfig: () => null, 
-  saveCloudConfig: () => {}, 
-  importData: () => false 
-};
+    updates[`loomConfigs/${config.id}`] = config;
+    await update(ref(this.db, 'warp_manager_data'), updates);
+  }
+
+  // Backwards compatibility for single transaction
+  async addTransaction(transaction: Omit<Transaction, 'id' | 'timestamp' | 'batchNumber'>) {
+    const { loomId, ...rest } = transaction;
+    await this.addBatchTransactions(loomId, [rest]);
+  }
+
+  async deleteOldBatchesData(loomId: LoomID, currentBatchNumber: number) {
+    const rawTxs = this.cache.transactions;
+    const toDelete = rawTxs.filter(tx => tx.loomId === loomId && tx.batchNumber < currentBatchNumber);
+    for (const tx of toDelete) { await remove(ref(this.db, `warp_manager_data/transactions/${tx.id}`)); }
+    return toDelete.length;
+  }
+
+  async deleteCurrentAndReset(loomId: LoomID) {
+    const config = { ...this.cache.loomConfigs[loomId] };
+    const currentBN = config.batchNumber;
+    const toDelete = this.cache.transactions.filter(tx => tx.loomId === loomId && tx.batchNumber === currentBN);
+    for (const tx of toDelete) { await remove(ref(this.db, `warp_manager_data/transactions/${tx.id}`)); }
+    config.batchNumber = 1;
+    config.current = 0;
+    const updates: any = {};
+    updates[`loomConfigs/${loomId}`] = config;
+    await this.addOpeningBalanceEntries(config, Date.now(), updates);
+    await update(ref(this.db, 'warp_manager_data'), updates);
+    return toDelete.length;
+  }
+
+  async updateLoomSettings(loomId: LoomID, settings: { target: number, coneUsageFactor: number, jarigaiUsageFactor: number }) {
+    const config = { ...this.cache.loomConfigs[loomId], ...settings };
+    await set(ref(this.db, `warp_manager_data/loomConfigs/${loomId}`), config);
+  }
+
+  async resetAll(toZero: boolean = true) {
+    const configs = toZero ? ZERO_CONFIGS : DEFAULT_CONFIGS;
+    const initialData = { schemaVersion: CURRENT_SCHEMA_VERSION, transactions: {}, loomConfigs: configs };
+    await set(ref(this.db, 'warp_manager_data'), initialData);
+    const updates: any = {};
+    for (const config of Object.values(configs)) {
+      await this.addOpeningBalanceEntries(config, Date.now(), updates);
+    }
+    await update(ref(this.db, 'warp_manager_data'), updates);
+  }
+
+  exportData() {
+    const data = JSON.stringify(this.cache, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `warpmanager-backup-${new Date().toISOString().split('T')[0]}.json`;
+    link.click();
+  }
+
+  async importData(jsonData: string): Promise<{ success: boolean; message: string }> {
+    try {
+      const parsed = JSON.parse(jsonData);
+      if (!parsed.transactions || !parsed.loomConfigs) throw new Error("Invalid file format.");
+      const transactions = Array.isArray(parsed.transactions) 
+        ? parsed.transactions.reduce((acc: any, tx: Transaction) => { acc[tx.id] = tx; return acc; }, {})
+        : parsed.transactions;
+      await set(ref(this.db, 'warp_manager_data'), { ...parsed, transactions, schemaVersion: CURRENT_SCHEMA_VERSION });
+      return { success: true, message: "Data imported successfully." };
+    } catch (e: any) { return { success: false, message: e.message }; }
+  }
+}
+
+export const storageService = new StorageService();

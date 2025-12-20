@@ -1,509 +1,449 @@
-import React, { useMemo, useState } from 'react';
-import { LoomID, LoomConfig, Transaction } from '../types';
-import { storageService } from '../services/storageService';
-import { Download, Package, Layers, Scissors, Settings2, Trash2, Share2, CheckCircle, RotateCcw, Loader2, Archive, CalendarRange } from 'lucide-react';
-import html2canvas from 'html2canvas';
-import jsPDF from 'jspdf';
-import { format } from 'date-fns';
 
-interface Props {
+import React, { useState, useEffect, useMemo } from 'react';
+import { LoomID, LoomConfig, Transaction, BatchResponse, Batch } from '../types';
+import { Package, Scissors, TrendingUp, FileDown, Dna, Clock, Settings, RefreshCcw, Save, Lock, Edit3, History, Calendar, ShieldAlert, Trash2 } from 'lucide-react';
+import { fetchBatchData } from '../services/batchService';
+import { generateLoomReportPDF } from '../services/pdfService';
+import { storageService } from '../services/storageService';
+import clsx from 'clsx';
+
+interface LoomDashboardProps {
   loomId: LoomID;
   transactions: Transaction[];
   config: LoomConfig;
   onUpdate: () => void;
 }
 
-// --- COLOR THEMES ---
-const THEMES = {
-  current: { 
-    name: 'Current',
-    border: 'border-indigo-500', 
-    bg: 'bg-white', 
-    headerBg: 'bg-indigo-50', 
-    text: 'text-indigo-900', 
-    icon: 'text-indigo-600', 
-    badge: 'bg-indigo-100 text-indigo-800' 
-  },
-  0: { 
-    name: 'Last Batch',
-    border: 'border-emerald-500', 
-    bg: 'bg-slate-50', 
-    headerBg: 'bg-emerald-50', 
-    text: 'text-emerald-900', 
-    icon: 'text-emerald-600', 
-    badge: 'bg-emerald-100 text-emerald-800' 
-  },
-  1: { 
-    name: 'Previous Batch',
-    border: 'border-amber-500', 
-    bg: 'bg-slate-50', 
-    headerBg: 'bg-amber-50', 
-    text: 'text-amber-900', 
-    icon: 'text-amber-600', 
-    badge: 'bg-amber-100 text-amber-800' 
-  },
-  2: { 
-    name: 'Older Batch',
-    border: 'border-rose-500', 
-    bg: 'bg-slate-50', 
-    headerBg: 'bg-rose-50', 
-    text: 'text-rose-900', 
-    icon: 'text-rose-600', 
-    badge: 'bg-rose-100 text-rose-800' 
-  }
-};
-
-// --- HELPER: CALCULATE STATS ---
-const getBatchStats = (batchTxs: Transaction[], config: LoomConfig) => {
-  const totalSarees = batchTxs
-    .filter(t => t.item === 'SAREE')
-    .reduce((sum, t) => sum + t.quantity, 0);
-
-  const pendingSarees = Math.max(0, config.targetQty - totalSarees);
-
-  // --- CONE CALCS ---
-  const coneOpening = batchTxs
-    .filter(t => t.item === 'CONE' && t.billNo === 'OPENING BAL')
-    .reduce((sum, t) => sum + t.quantity, 0);
-
-  const coneReceived = batchTxs
-    .filter(t => t.item === 'CONE' && t.type === 'MATERIAL_IN' && t.billNo !== 'OPENING BAL' && t.quantity >= 0)
-    .reduce((sum, t) => sum + t.quantity, 0);
-
-  const coneReturned = batchTxs
-    .filter(t => t.item === 'CONE' && t.type === 'MATERIAL_IN' && t.billNo !== 'OPENING BAL' && t.quantity < 0)
-    .reduce((sum, t) => sum + Math.abs(t.quantity), 0);
-
-  const coneUsed = totalSarees * config.coneFactor;
-  const coneBalance = (coneOpening + coneReceived) - coneReturned - coneUsed;
-
-  // --- JARIGAI CALCS ---
-  const jarigaiOpening = batchTxs
-    .filter(t => t.item === 'JARIGAI' && t.billNo === 'OPENING BAL')
-    .reduce((sum, t) => sum + t.quantity, 0);
-
-  const jarigaiReceived = batchTxs
-    .filter(t => t.item === 'JARIGAI' && t.type === 'MATERIAL_IN' && t.billNo !== 'OPENING BAL' && t.quantity >= 0)
-    .reduce((sum, t) => sum + t.quantity, 0);
-
-  const jarigaiReturned = batchTxs
-    .filter(t => t.item === 'JARIGAI' && t.type === 'MATERIAL_IN' && t.billNo !== 'OPENING BAL' && t.quantity < 0)
-    .reduce((sum, t) => sum + Math.abs(t.quantity), 0);
-
-  const jarigaiUsed = totalSarees * config.jarigaiFactor;
-  const jarigaiBalance = (jarigaiOpening + jarigaiReceived) - jarigaiReturned - jarigaiUsed;
-
-  return {
-    totalSarees,
-    pendingSarees,
-    coneOpening,
-    coneReceived,
-    coneReturned,
-    coneUsed,
-    coneBalance,
-    jarigaiOpening,
-    jarigaiReceived,
-    jarigaiReturned,
-    jarigaiUsed,
-    jarigaiBalance
-  };
-};
-
-// --- SUB-COMPONENT: BATCH CARD ---
-const BatchView: React.FC<{
-  batchId: string;
-  transactions: Transaction[];
-  config: LoomConfig;
-  isCurrent: boolean;
-  themeIdx: number | 'current';
-  onDelete?: (id: string) => void;
-  onFinish?: (e: React.MouseEvent) => void;
-  isResetting?: boolean;
-}> = ({ batchId, transactions, config, isCurrent, themeIdx, onDelete, onFinish, isResetting }) => {
-  const [isPdfLoading, setIsPdfLoading] = useState(false);
-  const theme = themeIdx === 'current' ? THEMES.current : THEMES[themeIdx as 0|1|2] || THEMES[2];
-  const stats = getBatchStats(transactions, config);
-  const isTargetReached = isCurrent && stats.totalSarees >= config.targetQty;
-  
-  // Sort by date desc
-  const sortedTxs = [...transactions].sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
-  
-  // Date Range
-  const timestamps = sortedTxs.map(t => t.timestamp || 0).filter(t => t > 0);
-  const minDate = timestamps.length ? new Date(Math.min(...timestamps)) : null;
-  const maxDate = timestamps.length ? new Date(Math.max(...timestamps)) : null;
-  const dateRange = minDate && maxDate 
-    ? `${format(minDate, 'dd MMM')} - ${format(maxDate, 'dd MMM yyyy')}`
-    : 'New Batch';
-
-  const reportId = `batch-report-${batchId}`;
-
-  const downloadPDF = async () => {
-    const element = document.getElementById(reportId);
-    if (!element) return;
-    setIsPdfLoading(true);
-    
-    // Hide buttons during capture
-    const buttons = element.querySelectorAll('button, .no-print');
-    buttons.forEach(b => (b as HTMLElement).style.display = 'none');
-    
-    try {
-      await new Promise(resolve => setTimeout(resolve, 50));
-      const canvas = await html2canvas(element, { scale: 2, useCORS: true, logging: false, backgroundColor: '#ffffff' });
-      const imgData = canvas.toDataURL('image/png');
-      const pdf = new jsPDF('p', 'mm', 'a4');
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-      
-      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
-      pdf.save(`BATCH_REPORT_${batchId.slice(-6)}.pdf`);
-    } catch (e) {
-      console.error("PDF Error:", e);
-      alert("Failed to generate PDF");
-    } finally {
-      buttons.forEach(b => (b as HTMLElement).style.display = '');
-      setIsPdfLoading(false);
-    }
-  };
-
-  // Stock Helper
-  const getStockClasses = (bal: number) => {
-    if (Math.abs(bal) < 0.001) return 'border-slate-200 text-slate-700';
-    if (bal < 0) return 'border-red-400 bg-red-50 text-red-700';
-    return 'border-emerald-400 bg-emerald-50 text-emerald-700';
-  };
-
+/**
+ * Enhanced Batch Card component showing full material audit and production stats
+ */
+const BatchCard = ({ batch, isCurrent, onExport }: { 
+  batch: Batch, 
+  isCurrent: boolean, 
+  onExport: (b: Batch) => void
+}) => {
   return (
-    <div id={reportId} className={`rounded-xl border-2 overflow-hidden shadow-sm ${theme.border} ${theme.bg} mb-8 transition-all`}>
-      {/* HEADER */}
-      <div className={`p-4 ${theme.headerBg} border-b ${theme.border} flex flex-col md:flex-row justify-between md:items-center gap-4`}>
-        <div className="flex items-center gap-3">
-          <div className={`p-2 rounded-lg bg-white/50 ${theme.text}`}>
-            {isCurrent ? <CheckCircle className="w-6 h-6" /> : <Archive className="w-6 h-6" />}
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-                <h3 className={`font-bold text-lg ${theme.text}`}>
-                    {theme.name}
-                </h3>
-                {!isCurrent && <span className="text-xs font-mono text-slate-400 px-1 border rounded bg-white">
-                    {batchId.slice(-4)}
-                </span>}
-            </div>
-            <div className="flex items-center gap-2 text-sm text-slate-500 font-medium">
-                <CalendarRange className="w-4 h-4" />
-                {dateRange}
-            </div>
-          </div>
+    <div 
+      className={clsx(
+        "p-5 rounded-2xl border transition-all hover:shadow-lg flex flex-col gap-4 relative overflow-hidden h-full min-h-[320px]",
+        isCurrent ? "ring-4 ring-indigo-500/20 border-indigo-500 shadow-xl bg-white" : "border-slate-200 bg-white"
+      )}
+      style={{ backgroundColor: isCurrent ? undefined : batch.color }}
+    >
+      {isCurrent && (
+        <div className="absolute top-0 right-0 bg-indigo-500 text-white text-[10px] font-black px-3 py-1 rounded-bl-lg uppercase tracking-tighter z-10">
+          Current Active
         </div>
+      )}
+      
+      <div className="flex justify-between items-start relative z-10">
+        <div>
+          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-0.5">Production Cycle</div>
+          <h4 className="text-lg md:text-xl font-black text-slate-800">Batch #{batch.batchNumber}</h4>
+        </div>
+        <button 
+          onClick={() => onExport(batch)}
+          className="p-2.5 bg-slate-900 text-white rounded-xl hover:bg-slate-800 transition-colors shadow-md active:scale-95 shrink-0"
+          title="Download Batch Report"
+        >
+          <FileDown className="w-4 h-4" />
+        </button>
+      </div>
 
-        <div className="flex items-center gap-3 self-end md:self-auto">
-             {/* Progress (Only visible if active or large count) */}
-            <div className="text-right mr-2">
-                <div className="text-xs uppercase font-bold text-slate-400">Production</div>
-                <div className={`text-xl font-bold ${theme.text}`}>
-                   {stats.totalSarees} <span className="text-sm opacity-60">Sarees</span>
-                </div>
-            </div>
-
-            <button 
-                onClick={downloadPDF} 
-                className="p-2 bg-white border border-slate-200 rounded-lg hover:bg-slate-50 text-slate-600 transition-colors cursor-pointer"
-                title="Download PDF"
-            >
-                {isPdfLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Download className="w-5 h-5" />}
-            </button>
-            
-            {isCurrent && onFinish && (
-                <button
-                    onClick={onFinish}
-                    disabled={isResetting}
-                    className={`flex items-center gap-2 px-4 py-2 font-bold rounded-lg text-white shadow-sm transition-all
-                        ${isTargetReached ? 'bg-emerald-600 hover:bg-emerald-700 animate-pulse' : 'bg-slate-700 hover:bg-slate-800'}
-                    `}
-                >
-                    {isResetting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
-                    {isTargetReached ? 'Finish Batch' : 'Close Batch'}
-                </button>
-            )}
+      <div className="grid grid-cols-2 gap-3 relative z-10">
+        <div className="bg-white/60 p-2.5 rounded-xl border border-black/5">
+           <div className="text-[9px] font-bold text-slate-500 uppercase tracking-tight">Sarees Done</div>
+           <div className="text-base md:text-lg font-black text-slate-800">{batch.produced} <span className="text-[10px] font-normal text-slate-400">/ {batch.target}</span></div>
+        </div>
+        <div className="bg-white/60 p-2.5 rounded-xl border border-black/5 text-right sm:text-left">
+           <div className="text-[9px] font-bold text-slate-500 uppercase tracking-tight">Remaining</div>
+           <div className="text-base md:text-lg font-black text-rose-500">{batch.remaining}</div>
         </div>
       </div>
 
-      <div className="p-4 md:p-6 space-y-6">
-        {/* STATS GRID */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {/* PRODUCTION */}
-            <div className="bg-white p-4 rounded-lg border border-slate-200 shadow-sm relative overflow-hidden">
-                 <div className="flex items-center gap-2 mb-2 text-slate-600">
-                    <Scissors className="w-4 h-4" />
-                    <span className="font-bold text-xs uppercase">Sarees</span>
-                 </div>
-                 <div className="text-3xl font-bold text-slate-800">{stats.totalSarees}</div>
-                 {isCurrent && (
-                     <div className="mt-2 w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                        <div 
-                           className={`h-full ${isTargetReached ? 'bg-emerald-500' : 'bg-indigo-500'} transition-all`}
-                           style={{ width: `${Math.min(100, (stats.totalSarees / config.targetQty) * 100)}%` }}
-                        />
-                     </div>
-                 )}
-                 {isCurrent && (
-                     <div className="mt-1 text-xs text-slate-400 font-medium">Target: {config.targetQty}</div>
-                 )}
-            </div>
-
-            {/* CONE */}
-            <div className={`bg-white p-4 rounded-lg border-2 shadow-sm ${getStockClasses(stats.coneBalance)}`}>
-                 <div className="flex justify-between items-start mb-2">
-                    <div className="flex items-center gap-2 text-slate-600">
-                        <Package className="w-4 h-4" />
-                        <span className="font-bold text-xs uppercase">Cone</span>
-                    </div>
-                    <div className="text-xs font-mono bg-slate-100 px-1 rounded">IN: {stats.coneReceived.toFixed(1)}</div>
-                 </div>
-                 <div className="flex items-baseline gap-1">
-                    <span className="text-2xl font-bold">{stats.coneBalance.toFixed(2)}</span>
-                    <span className="text-xs font-bold opacity-60">kg</span>
-                 </div>
-                 <div className="mt-1 text-xs opacity-70">Used: {stats.coneUsed.toFixed(2)}</div>
-            </div>
-
-            {/* JARIGAI */}
-            <div className={`bg-white p-4 rounded-lg border-2 shadow-sm ${getStockClasses(stats.jarigaiBalance)}`}>
-                 <div className="flex justify-between items-start mb-2">
-                    <div className="flex items-center gap-2 text-slate-600">
-                        <Layers className="w-4 h-4" />
-                        <span className="font-bold text-xs uppercase">Jarigai</span>
-                    </div>
-                    <div className="text-xs font-mono bg-slate-100 px-1 rounded">IN: {stats.jarigaiReceived.toFixed(1)}</div>
-                 </div>
-                 <div className="flex items-baseline gap-1">
-                    <span className="text-2xl font-bold">{stats.jarigaiBalance.toFixed(2)}</span>
-                    <span className="text-xs font-bold opacity-60">kg</span>
-                 </div>
-                 <div className="mt-1 text-xs opacity-70">Used: {stats.jarigaiUsed.toFixed(2)}</div>
-            </div>
+      <div className="space-y-2 relative z-10 pt-2">
+        <div className="flex justify-between items-center text-[10px] md:text-[11px] pb-1.5 border-b border-black/5">
+          <span className="text-slate-500 font-bold uppercase tracking-tighter shrink-0">Opening Bal</span>
+          <span className="font-mono text-slate-700 text-right">{batch.openingCone.toFixed(1)} | {batch.openingJarigai.toFixed(1)} <span className="text-[9px] text-slate-400">kg</span></span>
         </div>
-
-        {/* TABLE */}
-        <div className="border border-slate-200 rounded-lg overflow-hidden bg-white">
-            <table className="w-full text-sm text-left">
-              <thead className="bg-slate-100 text-slate-600 uppercase font-bold text-xs">
-                <tr>
-                  <th className="p-3">Date</th>
-                  <th className="p-3">Item</th>
-                  <th className="p-3 text-right">Qty</th>
-                  <th className="p-3 hidden sm:table-cell">Bill</th>
-                  {isCurrent && <th className="p-3 text-right w-10">Del</th>}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {sortedTxs.length === 0 && (
-                  <tr><td colSpan={5} className="p-4 text-center text-slate-400">No transactions</td></tr>
-                )}
-                {sortedTxs.map(tx => (
-                  <tr key={tx.id} className="hover:bg-slate-50">
-                    <td className="p-3 text-slate-600 whitespace-nowrap">{format(new Date(tx.date), 'dd/MM/yy')}</td>
-                    <td className="p-3 font-medium">
-                       {tx.item}
-                       {tx.billNo === 'OPENING BAL' && <span className="ml-2 text-[10px] bg-slate-100 text-slate-500 px-1 rounded border">FWD</span>}
-                    </td>
-                    <td className={`p-3 text-right font-mono font-bold ${tx.quantity < 0 ? 'text-rose-600' : 'text-slate-700'}`}>
-                        {tx.quantity}
-                    </td>
-                    <td className="p-3 text-slate-400 text-xs hidden sm:table-cell">{tx.billNo}</td>
-                    {isCurrent && (
-                        <td className="p-3 text-right no-print">
-                            {tx.billNo !== 'OPENING BAL' && onDelete && (
-                                <button onClick={() => onDelete(tx.id)} className="text-slate-300 hover:text-red-500">
-                                    <Trash2 className="w-4 h-4" />
-                                </button>
-                            )}
-                        </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        <div className="flex justify-between items-center text-[10px] md:text-[11px] pb-1.5 border-b border-black/5">
+          <span className="text-slate-500 font-bold uppercase tracking-tighter shrink-0">Closing Bal</span>
+          <span className="font-mono text-emerald-600 font-black text-right">{batch.closingCone.toFixed(1)} | {batch.closingJarigai.toFixed(1)} <span className="text-[9px] text-slate-400">kg</span></span>
         </div>
+        <div className="flex justify-between items-center text-[10px] md:text-[11px] pb-1.5 border-b border-black/5">
+          <span className="text-slate-500 font-bold uppercase tracking-tighter shrink-0">Batch Used</span>
+          <span className="font-mono text-slate-600 text-right">{batch.consumedCone.toFixed(1)} | {batch.consumedJarigai.toFixed(1)} <span className="text-[9px] text-slate-400">kg</span></span>
+        </div>
+      </div>
+
+      <div className="mt-auto pt-2 flex flex-wrap items-center justify-between gap-2 relative z-10">
+        <div className="flex items-center gap-1.5 text-[9px] md:text-[10px] text-slate-400 font-bold uppercase">
+          <Calendar className="w-3.5 h-3.5" />
+          {new Date(batch.startTime).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+        </div>
+        {!isCurrent && batch.endTime && (
+          <div className="text-[9px] bg-slate-100 text-slate-500 px-2 py-0.5 rounded font-bold uppercase">Completed</div>
+        )}
       </div>
     </div>
   );
 };
 
+export const LoomDashboard: React.FC<LoomDashboardProps> = ({ loomId, transactions, config, onUpdate }) => {
+  const [batchData, setBatchData] = useState<BatchResponse | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
-export const LoomDashboard: React.FC<Props> = ({ loomId, transactions, config, onUpdate }) => {
-  const [isResetting, setIsResetting] = useState(false);
+  const [editTarget, setEditTarget] = useState(config.target.toString());
+  const [editConeFactor, setEditConeFactor] = useState(config.coneUsageFactor.toString());
+  const [editJarigaiFactor, setEditJarigaiFactor] = useState(config.jarigaiUsageFactor.toString());
 
-  // --- ACTIONS ---
-  const handleConfigChange = (field: keyof LoomConfig, value: string | number) => {
-    const updates: Partial<LoomConfig> = { [field]: value };
-    storageService.updateLoomConfig(loomId, updates);
-    onUpdate();
+  useEffect(() => {
+    setEditTarget(config.target.toString());
+    setEditConeFactor(config.coneUsageFactor.toString());
+    setEditJarigaiFactor(config.jarigaiUsageFactor.toString());
+  }, [config]);
+
+  const loomTransactions = transactions.filter(t => t.loomId === loomId && t.batchNumber === config.batchNumber);
+  const progressPercent = Math.min((config.current / config.target) * 100, 100);
+
+  const stockBreakdown = useMemo(() => {
+    const batchTxs = transactions.filter(t => t.loomId === loomId && t.batchNumber === config.batchNumber);
+    
+    const coneOpeningTx = batchTxs.find(t => t.type === 'CONE_OPENING');
+    const coneOpening = coneOpeningTx ? coneOpeningTx.value : 0;
+    
+    const jarigaiOpeningTx = batchTxs.find(t => t.type === 'JARIGAI_OPENING');
+    const jarigaiOpening = jarigaiOpeningTx ? jarigaiOpeningTx.value : 0;
+
+    const coneReceived = batchTxs.filter(t => t.type === 'CONE_RECEIPT').reduce((a, b) => a + b.value, 0);
+    const coneReturned = batchTxs.filter(t => t.type === 'CONE_RETURN').reduce((a, b) => a + b.value, 0);
+    
+    const jarigaiReceived = batchTxs.filter(t => t.type === 'JARIGAI_RECEIPT').reduce((a, b) => a + b.value, 0);
+    const jarigaiReturned = batchTxs.filter(t => t.type === 'JARIGAI_RETURN').reduce((a, b) => a + b.value, 0);
+
+    const coneUsed = batchTxs.filter(t => t.type === 'PRODUCTION').reduce((a, b) => a + (b.value * config.coneUsageFactor), 0);
+    const jarigaiUsed = batchTxs.filter(t => t.type === 'PRODUCTION').reduce((a, b) => a + (b.value * config.jarigaiUsageFactor), 0);
+
+    const coneBalance = coneOpening + coneReceived - coneUsed - coneReturned;
+    const jarigaiBalance = jarigaiOpening + jarigaiReceived - jarigaiUsed - jarigaiReturned;
+
+    return {
+      cone: { opening: coneOpening, received: coneReceived, returned: coneReturned, used: coneUsed, balance: coneBalance },
+      jarigai: { opening: jarigaiOpening, received: jarigaiReceived, returned: jarigaiReturned, used: jarigaiUsed, balance: jarigaiBalance }
+    };
+  }, [transactions, config, loomId]);
+
+  useEffect(() => {
+    loadBatches();
+  }, [loomId, transactions, config.batchNumber]);
+
+  const loadBatches = async () => {
+    const data = await fetchBatchData(loomId);
+    setBatchData(data);
   };
 
-  const performReset = async () => {
+  const handleSaveSettings = async () => {
+    const target = parseFloat(editTarget);
+    const coneFactor = parseFloat(editConeFactor);
+    const jarigaiFactor = parseFloat(editJarigaiFactor);
+    if (isNaN(target) || isNaN(coneFactor) || isNaN(jarigaiFactor)) {
+      alert("Please enter valid numbers.");
+      return;
+    }
+    setIsSaving(true);
     try {
-      setIsResetting(true);
-      await storageService.performBatchSplit(loomId, [], []);
+      await storageService.updateLoomSettings(loomId, { target, coneUsageFactor: coneFactor, jarigaiUsageFactor: jarigaiFactor });
       onUpdate();
+      setShowSettings(false);
     } catch (e) {
-      console.error("Reset Failed:", e);
-      alert("Error during reset.");
-    } finally {
-        setIsResetting(false);
+      alert("Failed to save settings.");
+    } finally { setIsSaving(false); }
+  };
+
+  const handleFactoryReset = async () => {
+    const isConfirmed = window.confirm('Are you sure you want to reset all data? This will zero out all looms and batches across the factory.');
+    if (!isConfirmed) return;
+
+    const password = window.prompt('Please enter the system password to confirm factory reset:');
+    if (password === '1234') {
+      setIsSaving(true);
+      try {
+        await storageService.resetAll(true);
+        onUpdate();
+        setShowSettings(false);
+        alert('System successfully reset to factory defaults.');
+      } catch (err) {
+        alert('Failed to reset system.');
+      } finally {
+        setIsSaving(false);
+      }
+    } else if (password !== null) {
+      alert('Incorrect password. Action cancelled.');
     }
   };
 
-  const handleFinishBatch = (e: React.MouseEvent) => {
-    e.preventDefault();
-    if (confirm("✅ COMPLETE BATCH?\n\nThis will archive current data and start a new batch.\n\nMaterial Balances will be CARRIED FORWARD.\n\nContinue?")) {
-      performReset();
-    }
+  const labelStyle = "block text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1.5";
+  const editInputStyle = "w-full px-3 py-2.5 bg-white border-2 border-slate-100 rounded-lg text-sm font-semibold text-slate-700 focus:border-indigo-500 outline-none transition-all";
+  const lockInputStyle = "w-full px-3 py-2.5 bg-slate-50 border-2 border-slate-100 rounded-lg text-sm font-semibold text-slate-400 cursor-not-allowed flex items-center justify-between";
+
+  const BreakdownRow = ({ label, value, isPositive }: { label: string, value: string | number, isPositive?: boolean }) => (
+    <div className="flex justify-between items-center py-2 border-b border-slate-50 last:border-0 text-[13px]">
+      <span className="text-slate-500 font-medium shrink-0">{label}</span>
+      <span className={clsx("font-bold", isPositive === true ? "text-emerald-600" : isPositive === false ? "text-rose-400" : "text-slate-700")}>
+        {isPositive === true ? '+' : isPositive === false ? '-' : ''}{value}
+      </span>
+    </div>
+  );
+
+  const handlePdfExport = async () => {
+    if (!batchData?.current_batch) return;
+    setIsGeneratingPdf(true);
+    try { await generateLoomReportPDF(loomId, batchData.current_batch, transactions); } 
+    catch (err) { alert("Failed to generate PDF report."); } 
+    finally { setIsGeneratingPdf(false); }
   };
 
-  const handleManualReset = () => {
-    if(confirm("⚠️ FORCE RESET\n\nAre you sure you want to force start a new batch?")) {
-      performReset();
-    }
+  const handleBatchPdfExport = async (batch: Batch) => {
+    try { await generateLoomReportPDF(loomId, batch, transactions); } 
+    catch (err) { alert("Failed to generate PDF report."); } 
   };
 
-  const deleteTx = (id: string) => {
-    if (confirm("Delete this entry?")) {
-      storageService.deleteTransaction(id);
-      onUpdate();
-    }
-  };
-
-  // --- DATA GROUPING ---
-  const { currentBatch, historyBatches } = useMemo(() => {
-     const allLoomTxs = transactions.filter(t => String(t.loomId) === String(loomId));
-     const currentBatchId = config.currentBatchId;
-     const groups: Record<string, Transaction[]> = {};
-     
-     // 1. Group all txs by batchId
-     allLoomTxs.forEach(tx => {
-         let bId = tx.batchId;
-         // Legacy handling: If no batch ID, try to map to current if current is legacy
-         if (!bId) {
-             bId = (currentBatchId && currentBatchId.includes('legacy')) 
-                ? currentBatchId 
-                : 'legacy_archive';
-         }
-         if (!groups[bId]) groups[bId] = [];
-         groups[bId].push(tx);
-     });
-
-     // 2. Identify Current vs History
-     const currentTxs = currentBatchId ? (groups[currentBatchId] || []) : [];
-     
-     // 3. Process History
-     const history = Object.keys(groups)
-        .filter(id => id !== currentBatchId)
-        .map(id => ({
-            id,
-            txs: groups[id],
-            lastActive: Math.max(...groups[id].map(t => t.timestamp || 0))
-        }))
-        .sort((a, b) => b.lastActive - a.lastActive) // Newest first
-        .slice(0, 3); // Take top 3
-
-     return { currentBatch: currentTxs, historyBatches: history };
-  }, [transactions, loomId, config.currentBatchId]);
+  // Speedometer angle calculation (Semi-circle: -90 to 90 degrees)
+  const baseAngle = (progressPercent * 1.8) - 90;
 
   return (
-    <div className="space-y-8 animate-fade-in pb-20">
-      
-      {/* GLOBAL SETTINGS (Current Batch) */}
-      <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <Settings2 className="w-5 h-5 text-slate-500" />
-            <h3 className="font-bold text-slate-700">Loom Configuration</h3>
+    <div className="space-y-6 animate-fade-in pb-20">
+      {/* 1. Header Section */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-3 mb-1">
+             <div className="px-3 py-1 bg-slate-900 text-white text-[11px] font-bold rounded-md">LOOM {loomId}</div>
+             <span className="text-[13px] font-bold text-slate-400 uppercase tracking-tight">Active Batch #{config.batchNumber}</span>
           </div>
-          <button 
-             onClick={handleManualReset}
-             className="text-xs text-red-500 font-bold border border-red-100 bg-red-50 px-3 py-1 rounded hover:bg-red-100"
-          >
-             FORCE RESET
+          <h2 className="text-2xl md:text-3xl font-bold text-slate-800 tracking-tight">Loom Performance</h2>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={handlePdfExport} disabled={isGeneratingPdf} className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 bg-white text-slate-600 border border-slate-200 rounded-xl text-[13px] font-bold hover:bg-slate-50 shadow-sm disabled:opacity-50 transition-all">
+            <FileDown className="w-4 h-4" /> EXPORT PDF
+          </button>
+          <button onClick={() => setShowSettings(!showSettings)} className={clsx("flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-[13px] font-bold transition-all border shadow-sm", showSettings ? "bg-indigo-600 text-white border-indigo-700" : "bg-white text-indigo-600 border-indigo-100 hover:bg-indigo-50")}>
+            <Settings className={clsx("w-4 h-4", showSettings && "animate-spin-slow")} />
+            {showSettings ? 'CLOSE CONFIG' : 'BATCH CONFIG'}
           </button>
         </div>
-        
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-          <div>
-            <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Start Date</label>
-            <input 
-              type="date" 
-              className="w-full p-2 border rounded bg-slate-50 text-sm font-medium"
-              value={config.startDate}
-              onChange={(e) => handleConfigChange('startDate', e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Target Qty</label>
-            <input 
-              type="number" 
-              className="w-full p-2 border rounded bg-slate-50 text-sm font-medium"
-              value={config.targetQty}
-              onChange={(e) => handleConfigChange('targetQty', Number(e.target.value))}
-            />
-          </div>
-          <div>
-            <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Cone Factor</label>
-            <input 
-              type="number" step="0.001"
-              className="w-full p-2 border rounded bg-slate-50 text-sm font-medium"
-              value={config.coneFactor}
-              onChange={(e) => handleConfigChange('coneFactor', Number(e.target.value))}
-            />
-          </div>
-          <div>
-            <label className="text-xs font-bold text-slate-500 uppercase block mb-1">Jarigai Factor</label>
-            <input 
-              type="number" step="0.001"
-              className="w-full p-2 border rounded bg-slate-50 text-sm font-medium"
-              value={config.jarigaiFactor}
-              onChange={(e) => handleConfigChange('jarigaiFactor', Number(e.target.value))}
-            />
-          </div>
-        </div>
       </div>
 
-      {/* 1. CURRENT BATCH */}
-      <div className="animate-in slide-in-from-bottom-4 duration-500">
-        <BatchView 
-            batchId={config.currentBatchId || 'new'}
-            transactions={currentBatch}
-            config={config}
-            isCurrent={true}
-            themeIdx="current"
-            onDelete={deleteTx}
-            onFinish={handleFinishBatch}
-            isResetting={isResetting}
-        />
-      </div>
+      {showSettings && (
+        <div className="bg-white p-5 md:p-6 rounded-2xl border-2 border-indigo-50 shadow-xl shadow-indigo-500/5 animate-fade-in space-y-8">
+          <div className="flex flex-wrap items-center justify-between gap-4 mb-2">
+             <h3 className="text-base md:text-lg font-bold text-slate-800 flex items-center gap-2"><Edit3 className="w-5 h-5 text-indigo-500" /> Adjust Parameters</h3>
+             <button onClick={handleSaveSettings} disabled={isSaving} className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 bg-indigo-600 text-white rounded-lg font-bold text-sm hover:bg-indigo-700 shadow-lg transition-all active:scale-[0.98]">
+                {isSaving ? <RefreshCcw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} SAVE CHANGES
+             </button>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-6">
+            <div><label className={labelStyle}>Batch #</label><div className={lockInputStyle}><span>{config.batchNumber}</span><Lock className="w-3 h-3" /></div></div>
+            <div><label className={labelStyle}>Current Prod.</label><div className={lockInputStyle}><span>{config.current}</span><Lock className="w-3 h-3" /></div></div>
+            <div><label className={labelStyle}>Target Qty</label><input type="number" value={editTarget} onChange={(e) => setEditTarget(e.target.value)} className={editInputStyle} /></div>
+            <div><label className={labelStyle}>Cone Factor</label><input type="number" step="0.001" value={editConeFactor} onChange={(e) => setEditConeFactor(e.target.value)} className={editInputStyle} /></div>
+            <div><label className={labelStyle}>Jarigai Factor</label><input type="number" step="0.001" value={editJarigaiFactor} onChange={(e) => setEditJarigaiFactor(e.target.value)} className={editInputStyle} /></div>
+          </div>
 
-      {/* 2. HISTORY BATCHES */}
-      {historyBatches.length > 0 && (
-        <div className="space-y-6">
-            <div className="flex items-center gap-2 text-slate-400 px-2">
-                <History className="w-5 h-5" />
-                <h3 className="font-bold text-sm uppercase tracking-wider">Recently Completed</h3>
+          <div className="pt-8 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-6">
+            <div className="flex-1">
+              <h4 className="text-red-600 font-bold text-sm uppercase tracking-tight flex items-center gap-2">
+                <ShieldAlert className="w-4 h-4" /> Global Danger Zone
+              </h4>
+              <p className="text-slate-400 text-xs mt-1">Reset all factory looms, batch numbers, and stock to zero. This is irreversible.</p>
             </div>
-            
-            {historyBatches.map((batch, idx) => (
-                <div key={batch.id} className="animate-in slide-in-from-bottom-4 duration-500" style={{ animationDelay: `${(idx + 1) * 100}ms` }}>
-                    <BatchView 
-                        batchId={batch.id}
-                        transactions={batch.txs}
-                        config={config} // Uses current config factors for history (limitation)
-                        isCurrent={false}
-                        themeIdx={idx as 0|1|2}
-                    />
-                </div>
-            ))}
+            <button 
+              onClick={handleFactoryReset}
+              disabled={isSaving}
+              className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-3 bg-rose-50 text-rose-600 border border-rose-100 rounded-xl font-black text-xs hover:bg-rose-600 hover:text-white transition-all shadow-sm uppercase tracking-widest"
+            >
+              <Trash2 className="w-4 h-4" /> FACTORY RESET SYSTEM
+            </button>
+          </div>
         </div>
       )}
+
+      {/* 2. Key Metrics Grid (3-Column Layout) */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col min-h-[300px]">
+          <div className="flex items-center gap-2 mb-4">
+            <div className="p-2 bg-indigo-50 rounded-lg text-indigo-600"><TrendingUp className="w-5 h-5" /></div>
+            <h3 className="font-bold text-slate-800">Production Velocity</h3>
+          </div>
+          
+          <div className="flex-1 flex flex-col items-center justify-center relative overflow-hidden">
+             {/* Speedometer Gauge */}
+             <div className="relative w-full max-w-[208px] aspect-[2/1] overflow-hidden flex items-end justify-center">
+                <svg viewBox="0 0 100 50" className="w-full h-full">
+                   <path d="M 5 50 A 45 45 0 0 1 95 50" fill="none" stroke="#f1f5f9" strokeWidth="8" strokeLinecap="round" />
+                   <path 
+                     d="M 5 50 A 45 45 0 0 1 95 50" 
+                     fill="none" 
+                     stroke="#6366f1" 
+                     strokeWidth="8" 
+                     strokeLinecap="round" 
+                     strokeDasharray="141.37" 
+                     strokeDashoffset={141.37 - (progressPercent / 100) * 141.37}
+                     style={{ transition: 'stroke-dashoffset 1.5s cubic-bezier(0.34, 1.56, 0.64, 1)' }}
+                   />
+                </svg>
+
+                {/* Shaking Needle */}
+                <div 
+                   className="absolute bottom-0 w-1 h-[90%] bg-gradient-to-t from-orange-600 to-orange-400 rounded-full animate-needle shadow-md"
+                   style={{ 
+                     '--base-angle': `${baseAngle}deg`,
+                     transform: `rotate(${baseAngle}deg)`,
+                     transition: 'transform 1s cubic-bezier(0.34, 1.56, 0.64, 1)',
+                     transformOrigin: '50% 100%'
+                   } as React.CSSProperties}
+                >
+                   <div className="absolute top-0 left-1/2 -translate-x-1/2 w-2 h-2 bg-orange-500 rounded-full blur-[2px] opacity-50" />
+                </div>
+                <div className="absolute bottom-[-6px] w-4 h-4 bg-slate-800 rounded-full border-2 border-white shadow-lg z-20" />
+             </div>
+
+             <div className="text-center mt-4">
+                <div className="text-3xl font-black text-slate-800 tracking-tighter">{Math.round(progressPercent)}%</div>
+                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Target Reached</div>
+             </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 mt-6">
+             <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 text-center">
+                <div className={labelStyle}>Produced</div>
+                <div className="text-lg md:text-xl font-bold text-slate-800">{config.current}</div>
+             </div>
+             <div className="bg-indigo-50/50 p-3 rounded-xl border border-indigo-100 text-center">
+                <div className={labelStyle}>Target</div>
+                <div className="text-lg md:text-xl font-bold text-indigo-700">{config.target}</div>
+             </div>
+          </div>
+        </div>
+
+        {/* Cone Stock Analysis */}
+        <div className="bg-white p-5 md:p-6 rounded-2xl border border-slate-200 shadow-sm">
+          <div className="flex items-center justify-between mb-8">
+            <h3 className="font-bold text-slate-800 flex items-center gap-2"><div className="p-2 bg-orange-50 rounded-lg text-orange-600"><Package className="w-5 h-5" /></div> Cone (kg)</h3>
+            <span className={clsx("px-2 py-0.5 rounded text-[10px] font-bold uppercase shrink-0", stockBreakdown.cone.balance < 2 ? "bg-rose-100 text-rose-600" : "bg-emerald-100 text-emerald-600")}>
+              {stockBreakdown.cone.balance < 2 ? "LOW" : "OPTIMAL"}
+            </span>
+          </div>
+          <div className="space-y-1 mb-6">
+            <BreakdownRow label="Batch Opening" value={stockBreakdown.cone.opening.toFixed(2)} />
+            <BreakdownRow label="Received" value={stockBreakdown.cone.received.toFixed(2)} isPositive={true} />
+            <BreakdownRow label="Batch Consumption" value={stockBreakdown.cone.used.toFixed(2)} isPositive={false} />
+            <BreakdownRow label="Returned" value={stockBreakdown.cone.returned.toFixed(2)} isPositive={false} />
+          </div>
+          <div className="pt-4 border-t-2 border-slate-50 flex justify-between items-baseline gap-2">
+             <span className="text-[11px] md:text-[13px] font-bold text-slate-400 uppercase">Current Balance</span>
+             <span className={clsx("text-2xl md:text-3xl font-bold", stockBreakdown.cone.balance < 0 ? "text-rose-600" : "text-slate-800")}>
+               {stockBreakdown.cone.balance.toFixed(2)}
+             </span>
+          </div>
+        </div>
+
+        {/* Jarigai Stock Analysis */}
+        <div className="bg-white p-5 md:p-6 rounded-2xl border border-slate-200 shadow-sm">
+          <div className="flex items-center justify-between mb-8">
+            <h3 className="font-bold text-slate-800 flex items-center gap-2"><div className="p-2 bg-purple-50 rounded-lg text-purple-600"><Dna className="w-5 h-5" /></div> Jarigai (kg)</h3>
+            <span className={clsx("px-2 py-0.5 rounded text-[10px] font-bold uppercase shrink-0", stockBreakdown.jarigai.balance < 1 ? "bg-rose-100 text-rose-600" : "bg-emerald-100 text-emerald-600")}>
+              {stockBreakdown.jarigai.balance < 1 ? "LOW" : "OPTIMAL"}
+            </span>
+          </div>
+          <div className="space-y-1 mb-6">
+            <BreakdownRow label="Batch Opening" value={stockBreakdown.jarigai.opening.toFixed(2)} />
+            <BreakdownRow label="Received" value={stockBreakdown.jarigai.received.toFixed(2)} isPositive={true} />
+            <BreakdownRow label="Batch Consumption" value={stockBreakdown.jarigai.used.toFixed(2)} isPositive={false} />
+            <BreakdownRow label="Returned" value={stockBreakdown.jarigai.returned.toFixed(2)} isPositive={false} />
+          </div>
+          <div className="pt-4 border-t-2 border-slate-50 flex justify-between items-baseline gap-2">
+             <span className="text-[11px] md:text-[13px] font-bold text-slate-400 uppercase">Current Balance</span>
+             <span className={clsx("text-2xl md:text-3xl font-bold", stockBreakdown.jarigai.balance < 0 ? "text-rose-600" : "text-slate-800")}>
+               {stockBreakdown.jarigai.balance.toFixed(2)}
+             </span>
+          </div>
+        </div>
+      </div>
+
+      {/* 3. Transaction Log History Table */}
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+        <div className="p-5 md:p-6 border-b border-slate-100 bg-slate-50/30 flex items-center justify-between">
+           <h4 className="text-base md:text-lg font-bold text-slate-800 flex items-center gap-2">
+             <Clock className="w-5 h-5 text-indigo-500" /> Batch Log History
+           </h4>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-[14px] min-w-[600px]">
+            <thead className="bg-white text-slate-400 font-bold uppercase text-[10px] tracking-widest border-b border-slate-100">
+              <tr>
+                <th className="px-6 py-4">Timestamp</th>
+                <th className="px-6 py-4">Action Type</th>
+                <th className="px-6 py-4">Qty / Weight</th>
+                <th className="px-6 py-4">Reference Note</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-50 text-slate-600">
+              {loomTransactions.map(tx => (
+                <tr key={tx.id} className="hover:bg-slate-50/50 transition-colors">
+                  <td className="px-6 py-4 whitespace-nowrap">{new Date(tx.timestamp).toLocaleString('en-GB')}</td>
+                  <td className="px-6 py-4">
+                    <span className={clsx("px-2 py-0.5 rounded text-[10px] font-bold uppercase whitespace-nowrap", tx.type === 'PRODUCTION' ? "bg-indigo-50 text-indigo-600" : "bg-emerald-50 text-emerald-600")}>
+                      {tx.type.replace('_', ' ')}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 font-bold text-slate-800 whitespace-nowrap">
+                    {tx.type === 'PRODUCTION' ? `${tx.value} Sarees` : `${tx.value.toFixed(2)} kg`}
+                  </td>
+                  <td className="px-6 py-4 text-slate-400 truncate max-w-[200px]">{tx.note || '--'}</td>
+                </tr>
+              ))}
+              {loomTransactions.length === 0 && (
+                <tr><td colSpan={4} className="px-6 py-12 text-center text-slate-400 italic">No activity recorded for this batch yet.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* 4. Batch Performance History Cards */}
+      <div className="space-y-6 pt-6 border-t border-slate-200">
+        <div className="flex items-center gap-2 px-1 md:px-2">
+           <div className="p-2 bg-indigo-100 rounded-lg shrink-0"><History className="w-5 h-5 text-indigo-600" /></div>
+           <h3 className="text-lg md:text-xl font-black text-slate-800 uppercase tracking-tight">Cycle History</h3>
+        </div>
+        
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
+          {batchData?.current_batch && (
+            <BatchCard 
+              batch={batchData.current_batch} 
+              isCurrent={true} 
+              onExport={handleBatchPdfExport} 
+            />
+          )}
+
+          {batchData?.last_three_completed.map((batch) => (
+            <BatchCard 
+              key={batch.id}
+              batch={batch} 
+              isCurrent={false} 
+              onExport={handleBatchPdfExport}
+            />
+          ))}
+          
+          {(!batchData?.current_batch && batchData?.last_three_completed.length === 0) && (
+            <div className="col-span-full py-12 text-center bg-white rounded-3xl border border-dashed border-slate-300 text-slate-400 italic font-medium">
+              No batch history recorded yet.
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 };
